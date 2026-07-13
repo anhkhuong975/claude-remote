@@ -21,6 +21,14 @@ status (never pushed to a remote git host). Full design rationale:
 **On the remote machine:**
 - Linux (any apt-based distro) or Windows with WSL2 already installed
   (native Windows without WSL2 is not supported — see the design spec).
+  On Windows, this also requires the machine's own SSH server to be
+  configured so an *incoming* SSH connection lands inside WSL2, not
+  native PowerShell/cmd.exe — the default OpenSSH Server on Windows
+  drops you into PowerShell unless it's been specifically set up (or is
+  itself running inside WSL2) to hand sessions to the Linux userspace.
+  `claude-remote setup` assumes this is already true; it does not check
+  or configure it for you, and every remote command it runs (`uname -a`,
+  `apt-get`, `mkdir -p`, `command -v ...`) expects a bash/Linux shell.
 - Reachable over SSH from the Mac.
 - Everything else (`tmux`, Node.js, the Claude Code CLI) is installed
   automatically by `claude-remote setup`.
@@ -35,8 +43,9 @@ npm link          # puts `claude-remote` on PATH
 mkdir -p ~/.config/claude-remote
 cp config.example.yaml ~/.config/claude-remote/config.yaml
 # edit ~/.config/claude-remote/config.yaml: remote.host, remote.user,
-# remote.sshKeyPath, remote.homeMirrorPath (should match `echo $HOME` on
-# the Mac, e.g. /Users/pak), workspace.local
+# remote.os (linux or windows-wsl2 — checked against `uname -a` during
+# setup), remote.sshKeyPath, remote.homeMirrorPath (should match
+# `echo $HOME` on the Mac, e.g. /Users/pak), workspace.local
 
 claude-remote setup
 ```
@@ -55,6 +64,23 @@ in the synced workspace. Detach with `Ctrl-b d` any time; running
 starting a new one.
 
 Check sync/connectivity state without launching: `claude-remote status`.
+
+## Command reference
+
+- `--config <path>` (global option, before the subcommand) — use a
+  config file other than the default `~/.config/claude-remote/config.yaml`.
+- `claude-remote setup` — one-time: verify SSH access, install remote
+  dependencies, start the `~/.claude` sync session.
+- `claude-remote launch [-y|--yes]` — sync the active workspace and drop
+  into a live Claude Code session on the remote. `-y`/`--yes` skips the
+  concurrent-session confirmation prompt described below (see
+  "Operational rules") — useful for scripting, but skips a real safety
+  check, so don't reach for it out of habit.
+- `claude-remote status` — show SSH connectivity and both sync sessions'
+  state.
+- `claude-remote config` — print the fully resolved config (after any
+  `CLAUDE_REMOTE_WORKSPACE` override) as JSON; useful for confirming
+  which workspace/paths a command would actually use before running it.
 
 ## Operational rules (read before your first real session)
 
@@ -94,5 +120,16 @@ trusting this day-to-day:
       reattaches to the same tmux session instead of creating a new one.
 - [ ] Edit a file in the workspace on the remote; confirm it propagates
       back to the Mac.
+- [ ] **Conflict direction (highest-risk item — see the WHY-comment above
+      `createSession` in `src/sync.ts`):** pause or disconnect the
+      workspace Mutagen session (`mutagen sync pause <name>`), edit the
+      *same* file on both the Mac and the remote with different content,
+      then resume/reconnect (`mutagen sync resume <name>`) and let it
+      resolve. Confirm the **remote's** edit is the one that survives. If
+      the Mac's edit survives instead, that confirms the Critical
+      finding's risk materialized — `--default-conflict-resolution=beta`
+      either isn't a real flag or doesn't override `two-way-resolved`'s
+      default, and the conflict-resolution flag needs fixing before this
+      tool's "remote wins" claim can be trusted.
 - [ ] `claude-remote status`: confirm both sessions show as syncing and
       SSH shows as reachable.

@@ -64,6 +64,15 @@ export async function runLaunch(config: Config, opts: { skipConfirm: boolean }):
   console.log(`Workspace: ${workspaceLocal}`);
   console.log(`Remote:    ${config.remote.user}@${config.remote.host}:${workspaceRemote}`);
 
+  // Note: unlike setup.ts's `ensureRemoteDirectories`, launch never
+  // explicitly creates `workspaceRemote`'s parent directory before
+  // pointing Mutagen at it. That's fine for `config.workspace.local`
+  // (setup already created it), but if CLAUDE_REMOTE_WORKSPACE points at
+  // a local directory that's never been synced before, nothing here
+  // ensures its remote parent exists first. Mutagen is expected to
+  // create the sync root itself on first sync, so this asymmetry likely
+  // isn't a functional break — but it's unverified (no live Mutagen
+  // available during implementation) and worth confirming on a real run.
   await ensureSession({
     name: sessionNameForWorkspace(workspaceLocal),
     alpha: workspaceLocal,

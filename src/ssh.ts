@@ -82,8 +82,13 @@ export async function checkConnectivity(remote: Config['remote']): Promise<void>
  * targets are WSL2, a real Linux userspace — so this deliberately never
  * has to handle cmd.exe/PowerShell quoting rules (native Windows support
  * was explicitly rejected in the spec's "OS support" decision).
+ *
+ * Exported so setup.ts's `ensureRemoteDirectories` can reuse it for the
+ * `mkdir -p` command it builds — any path-containing-a-space bug fixed
+ * here should be fixed everywhere paths get interpolated into a remote
+ * shell command, not just here.
  */
-function shellQuote(value: string): string {
+export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 

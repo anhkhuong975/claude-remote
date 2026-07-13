@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { checkConnectivity, runRemoteCommand } from './ssh.js';
+import { checkConnectivity, runRemoteCommand, shellQuote } from './ssh.js';
 import { ensureSession } from './sync.js';
 import { resolveWorkspaceLocal, resolveWorkspaceRemote, type Config } from './config.js';
 
@@ -104,7 +104,16 @@ async function ensureRemoteDirectories(config: Config, workspaceLocal: string): 
   const workspaceParentRemote = join(workspaceRemote, '..');
 
   logStep(`Creating remote directories: ${claudeHomeRemote}, ${workspaceParentRemote}`);
-  const result = await runRemoteCommand(config.remote, `mkdir -p ${claudeHomeRemote} ${workspaceParentRemote}`);
+  // Quoted with shellQuote (not raw-interpolated) because these paths
+  // come from user-editable config (homeMirrorPath, workspace.local) and
+  // may contain spaces — an unquoted path like `/Users/pak/My Projects`
+  // would make `mkdir -p` create two separate directories instead of one
+  // path with a space, and the later Mutagen sync would then target a
+  // directory that was never actually created.
+  const result = await runRemoteCommand(
+    config.remote,
+    `mkdir -p ${shellQuote(claudeHomeRemote)} ${shellQuote(workspaceParentRemote)}`
+  );
   if (result.code !== 0) {
     throw new Error(`Failed to create remote directories:\n${result.stderr.trim()}`);
   }

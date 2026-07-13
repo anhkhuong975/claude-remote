@@ -1,0 +1,8 @@
+node_modules/
+dist/
+# The real, machine-specific config — only config.example.yaml is
+# committed. This also covers the case of testing with --config
+# ./config.yaml instead of the default ~/.config/claude-remote/ path.
+config.yaml
+*.log
+.DS_Store

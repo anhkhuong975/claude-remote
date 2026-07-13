@@ -1,0 +1,19 @@
+remote:
+  host: 192.168.1.50
+  user: pak
+  sshKeyPath: ~/.ssh/id_ed25519
+  os: linux
+  homeMirrorPath: /Users/pak
+
+workspace:
+  local: /Users/pak/Projects/Deepsel/DeepselSystems/alcoris-site
+
+sync:
+  ignore: [node_modules, .venv, dist, build, __pycache__]
+
+tmux:
+  sessionName: claude-remote
+
+launch:
+  autoStartClaude: true
+  claudeArgs: ["--dangerously-skip-permissions"]

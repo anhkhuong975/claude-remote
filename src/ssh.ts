@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { join } from 'node:path';
+import { unlink } from 'node:fs/promises';
 import type { Config } from './config.js';
 
 export interface SshResult {
@@ -28,14 +30,21 @@ function buildSshBaseArgs(remote: Config['remote']): string[] {
 
 /**
  * Runs a single command on the remote over SSH and captures its output.
- * Used by setup.ts for OS detection and dependency checks, where the
- * result is needed programmatically rather than streamed to the
- * terminal (contrast with launch.ts's interactive session, which uses
- * stdio: 'inherit' instead).
+ * Used by setup.ts for OS detection and dependency checks (no
+ * controlSocketPath — each of those runs once, so there's nothing to
+ * amortize) and by performance.ts's getRemotePerformanceSnapshot (always
+ * passes controlSocketPath, since that one runs every monitor cycle and
+ * a fresh handshake each time would defeat the whole point of the
+ * ControlMaster — see startControlMaster below).
  */
-export function runRemoteCommand(remote: Config['remote'], command: string): Promise<SshResult> {
+export function runRemoteCommand(
+  remote: Config['remote'],
+  command: string,
+  controlSocketPath?: string
+): Promise<SshResult> {
   return new Promise((resolvePromise, reject) => {
-    const args = [...buildSshBaseArgs(remote), command];
+    const socketArgs = controlSocketPath ? ['-S', controlSocketPath] : [];
+    const args = [...socketArgs, ...buildSshBaseArgs(remote), command];
     const child = spawn('ssh', args);
     let stdout = '';
     let stderr = '';
@@ -149,4 +158,111 @@ export function buildInteractiveLaunchArgs(
   const tmuxCommand = `tmux new-session -A -s ${shellQuote(opts.tmuxSessionName)} ${shellQuote(innerCommand)}`;
 
   return ['-t', ...buildSshBaseArgs(remote), tmuxCommand];
+}
+
+/**
+ * Where a session's SSH multiplexing control socket lives while a
+ * ControlMaster connection from this process is open. Keyed by both
+ * remote.host and process.pid so two claude-remote processes targeting
+ * the same remote at once (e.g. `launch` running in one terminal,
+ * `monitor` in another) never collide on the same socket file.
+ *
+ * Built under `/tmp` directly rather than `os.tmpdir()` — on macOS,
+ * tmpdir() often resolves to a long per-process path like
+ * `/var/folders/ab/cdefghijklmnop/T/`, and AF_UNIX socket paths have a
+ * platform limit around 104 bytes; a long tmpdir prefix plus this file's
+ * own name can exceed that and make startControlMaster fail outright.
+ * `/tmp` is fixed and short, which is why many other SSH multiplexing
+ * setups (and OpenSSH's own docs) use it explicitly instead of relying on
+ * the OS temp dir default.
+ */
+function controlSocketPath(remote: Config['remote']): string {
+  return join('/tmp', `claude-remote-ssh-${remote.host}-${process.pid}.sock`);
+}
+
+/**
+ * Opens a long-lived SSH multiplexing "master" connection and returns its
+ * control socket path. Every subsequent runRemoteCommand call passed this
+ * path reuses the already-authenticated connection instead of paying a
+ * fresh TCP+auth handshake — this is what makes monitor.ts's periodic
+ * polling (default every 3s) cheap: only this first connection pays real
+ * SSH connection cost.
+ *
+ * `-N` means "no remote command, just hold the connection open". `-f`
+ * backgrounds ssh *after* authentication succeeds (OpenSSH's own
+ * documented behavior for `-f`), so by the time this function's spawned
+ * process exits, the socket is already live — no separate "wait until
+ * ready" polling loop is needed. If authentication fails, ssh exits
+ * non-zero *before* forking, so a non-zero exit code here reliably means
+ * "master never came up".
+ */
+export function startControlMaster(remote: Config['remote']): Promise<string> {
+  const socketPath = controlSocketPath(remote);
+  const args = ['-f', '-N', '-M', '-S', socketPath, ...buildSshBaseArgs(remote)];
+
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('ssh', args);
+    let stderr = '';
+    child.stderr.on('data', (chunk) => (stderr += chunk));
+    child.on('error', (err) => reject(err));
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Failed to start SSH control master to ${remote.host}: ${stderr.trim()}`));
+        return;
+      }
+      resolvePromise(socketPath);
+    });
+  });
+}
+
+/**
+ * Closes a control master started by startControlMaster. Best-effort —
+ * never rejects — because this runs during monitor.ts's Ctrl+C teardown,
+ * where the priority is exiting cleanly; a secondary cleanup failure (the
+ * socket already gone because the connection dropped on its own, say)
+ * shouldn't block or mask that exit. Logs a warning instead of throwing
+ * so a genuinely stuck orphaned process is still visible, not silent.
+ */
+export function stopControlMaster(remote: Config['remote'], socketPath: string): Promise<void> {
+  const args = ['-S', socketPath, '-O', 'exit', ...buildSshBaseArgs(remote)];
+  return new Promise((resolvePromise) => {
+    const child = spawn('ssh', args);
+    let stderr = '';
+    child.stderr.on('data', (chunk) => (stderr += chunk));
+    child.on('error', async (err) => {
+      console.warn(`Warning: failed to close SSH control master: ${err.message}`);
+      await unlinkSocketFile(socketPath);
+      resolvePromise();
+    });
+    child.on('close', async (code) => {
+      if (code !== 0) {
+        console.warn(`Warning: SSH control master exit reported non-zero (${code}): ${stderr.trim()}`);
+      }
+      // `-O exit` above tells the master to shut down cleanly, but if it
+      // died abnormally earlier (crash, killed process — the reason
+      // this cleanup path is being hit at all in some cases) it can leave
+      // the socket file behind on disk. Best-effort delete it regardless
+      // of whether the exit command itself succeeded, same "never throws"
+      // contract as the rest of this function.
+      await unlinkSocketFile(socketPath);
+      resolvePromise();
+    });
+  });
+}
+
+/**
+ * Deletes a leftover control-socket file without ever throwing — a
+ * missing file (ENOENT, i.e. it's already gone, the common case when
+ * `-O exit` succeeded cleanly) is expected and silently ignored; any
+ * other error (permissions, etc.) is a non-fatal warning, consistent with
+ * stopControlMaster's own "never throws" contract.
+ */
+async function unlinkSocketFile(socketPath: string): Promise<void> {
+  try {
+    await unlink(socketPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`Warning: failed to remove leftover SSH control socket file: ${(err as Error).message}`);
+    }
+  }
 }

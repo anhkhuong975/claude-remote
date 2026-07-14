@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -170,23 +170,4 @@ export async function getSessionStatusText(name: string): Promise<string> {
   }
   const { stdout } = await runMutagen(['sync', 'list', name, '--long']);
   return stdout;
-}
-
-/**
- * Streams live-updating progress for one or more sessions via `mutagen
- * sync monitor`, used by `claude-remote monitor`. Unlike every other
- * function in this file, this doesn't use `runMutagen`/`execFileAsync` —
- * `sync monitor` is a long-running, continuously-redrawing terminal
- * command (like `top`), not a one-shot call whose output you capture and
- * return. `stdio: 'inherit'` hands the real terminal to mutagen directly
- * so its live redraw works, the same pattern launch.ts uses for handing
- * off to ssh/tmux. Resolves when the user Ctrl+C's out of watching —
- * that only stops the terminal view, not the background sync itself.
- */
-export function monitorSessions(names: string[]): Promise<number> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn('mutagen', ['sync', 'monitor', '--long', ...names], { stdio: 'inherit' });
-    child.on('error', reject);
-    child.on('close', (code) => resolvePromise(code ?? 1));
-  });
 }

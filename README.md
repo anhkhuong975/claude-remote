@@ -80,9 +80,18 @@ Check sync/connectivity state without launching: `claude-remote status`.
   check, so don't reach for it out of habit.
 - `claude-remote status` — show SSH connectivity and both sync sessions'
   state.
-- `claude-remote monitor` — live-stream sync progress for both sessions
-  (wraps `mutagen sync monitor --long`). `Ctrl+C` stops watching, not the
-  sync itself — it keeps running in Mutagen's background daemon either way.
+- `claude-remote monitor [--interval <seconds>]` — live-stream a combined
+  dashboard: both sessions' Mutagen sync status plus CPU/RAM/disk
+  performance for the Mac and the remote, refreshed every `--interval`
+  seconds (default `3`). `Ctrl+C` stops watching, not the sync itself — it
+  keeps running in Mutagen's background daemon either way. Performance
+  numbers come from a handful of cheap one-shot reads
+  (`/proc/loadavg`/`free`/`df` on the remote, `uptime`/`vm_stat`/`df` on
+  the Mac) bundled into a single SSH call per cycle over a reused
+  multiplexed connection — not a continuous sampler — so watching the
+  dashboard doesn't itself become a meaningful load on either machine. See
+  `docs/superpowers/specs/2026-07-14-monitor-performance-dashboard-design.md`
+  for the full design.
 - `claude-remote config` — print the fully resolved config (after any
   `CLAUDE_REMOTE_WORKSPACE` override) as JSON; useful for confirming
   which workspace/paths a command would actually use before running it.
@@ -138,3 +147,14 @@ trusting this day-to-day:
       tool's "remote wins" claim can be trusted.
 - [ ] `claude-remote status`: confirm both sessions show as syncing and
       SSH shows as reachable.
+- [ ] `claude-remote monitor`: confirm both the Sync section and both
+      Performance sections render without errors against a real remote,
+      and the numbers roughly match what Activity Monitor (Mac) / `htop`
+      (remote) report at the same moment.
+- [ ] While `monitor` is running, briefly disconnect the remote (e.g.
+      disable Wi-Fi for a few seconds): confirm the remote Performance
+      section shows the `(stale — ...)` marker instead of crashing the
+      dashboard, and recovers automatically once connectivity returns.
+- [ ] Ctrl+C out of `monitor`, then check for leftover processes/sockets:
+      `ps aux | grep '[s]sh -f -N -M'` should show nothing, and the
+      control socket file (`/tmp/claude-remote-ssh-*.sock`) should be gone.

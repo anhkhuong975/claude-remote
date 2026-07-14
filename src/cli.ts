@@ -10,7 +10,8 @@ import {
 import { runSetup, CLAUDE_HOME_SESSION_NAME } from './setup.js';
 import { runLaunch, sessionNameForWorkspace } from './launch.js';
 import { checkConnectivity } from './ssh.js';
-import { getSessionStatusText, monitorSessions } from './sync.js';
+import { getSessionStatusText } from './sync.js';
+import { runMonitor } from './monitor.js';
 
 /**
  * Factored out from bin/claude-remote.ts so the CLI's wiring can be
@@ -87,10 +88,17 @@ export function buildCli(): Command {
 
   program
     .command('monitor')
-    .description('Live-stream sync progress for both sessions (Ctrl+C stops watching, not the sync itself)')
-    .action(async () => {
+    .description(
+      'Live-stream sync status and CPU/RAM/disk performance for both machines (Ctrl+C stops watching, not the sync itself)'
+    )
+    .option('--interval <seconds>', 'refresh interval in seconds', '3')
+    .action(async (cmdOpts) => {
       const config = loadConfig(program.opts().config);
-      const code = await monitorSessions(activeSessionNames(config));
+      const intervalSeconds = parseInt(cmdOpts.interval, 10);
+      if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
+        throw new Error(`--interval must be a positive number of seconds, got: ${cmdOpts.interval}`);
+      }
+      const code = await runMonitor(config, activeSessionNames(config), { intervalSeconds });
       process.exitCode = code;
     });
 

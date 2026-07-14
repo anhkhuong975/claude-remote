@@ -29,6 +29,8 @@ status (never pushed to a remote git host). Full design rationale:
   `claude-remote setup` assumes this is already true; it does not check
   or configure it for you, and every remote command it runs (`uname -a`,
   `apt-get`, `mkdir -p`, `command -v ...`) expects a bash/Linux shell.
+  Step-by-step SSH server setup: `docs/remote-setup/windows-wsl2.md`
+  (Windows) or `docs/remote-setup/linux.md` (Linux).
 - Reachable over SSH from the Mac.
 - Everything else (`tmux`, Node.js, the Claude Code CLI) is installed
   automatically by `claude-remote setup`.
@@ -78,6 +80,9 @@ Check sync/connectivity state without launching: `claude-remote status`.
   check, so don't reach for it out of habit.
 - `claude-remote status` — show SSH connectivity and both sync sessions'
   state.
+- `claude-remote monitor` — live-stream sync progress for both sessions
+  (wraps `mutagen sync monitor --long`). `Ctrl+C` stops watching, not the
+  sync itself — it keeps running in Mutagen's background daemon either way.
 - `claude-remote config` — print the fully resolved config (after any
   `CLAUDE_REMOTE_WORKSPACE` override) as JSON; useful for confirming
   which workspace/paths a command would actually use before running it.

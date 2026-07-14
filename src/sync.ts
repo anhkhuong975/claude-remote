@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -55,33 +55,28 @@ export async function sessionExists(name: string): Promise<boolean> {
 }
 
 /**
- * Creates a named two-way sync session. `--sync-mode=two-way-resolved`
- * with `--default-conflict-resolution=beta` is *intended* to implement
- * the spec's conflict default ("remote wins"): every caller in this
- * codebase passes the Mac path as alpha and the remote path as beta, so
- * beta-wins should mean the remote's edit survives when both sides
- * changed the same file while disconnected.
+ * Creates a named two-way sync session using `--sync-mode=two-way-resolved`.
  *
- * UNVERIFIED — this tool was built without a reachable SSH target or a
- * local Mutagen install (see README's E2E checklist), so neither of the
- * following has ever actually been checked against real Mutagen:
- *   1. That `--default-conflict-resolution=beta` is a real flag at all.
- *      If it isn't, `mutagen sync create` rejects the whole command and
- *      EVERY session creation fails outright on first real `setup` —
- *      this is a hard blocker, not a subtle bug.
- *   2. That, if the flag exists, it actually overrides
- *      `two-way-resolved`'s own default conflict direction. Mutagen's
- *      docs (not verified live here) describe `two-way-resolved` as
- *      resolving toward alpha by default — if `--default-conflict-
- *      resolution=beta` doesn't override that, conflicts silently
- *      resolve Mac-wins, the *opposite* of the "remote wins" safety
- *      property README.md's "Operational rules" and launch.ts's
- *      `confirmNoConcurrentClaudeSession` both promise the user.
- * Before anyone trusts the "remote wins" claim, run
- * `mutagen sync create --help` (or induce a real conflict per the
- * README's E2E checklist) and confirm both of the above. Do not "fix"
- * this by guessing a different flag — an unverified guess replacing
- * another unverified guess doesn't reduce the risk, it just hides it.
+ * RESOLVED (2026-07-14, checked against a real `mutagen sync create --help`
+ * and Mutagen's own docs on a live install — this was previously an
+ * unverified guess, now confirmed): there is no
+ * `--default-conflict-resolution` flag — it never existed, and the
+ * original code that passed it would have made every `mutagen sync
+ * create` call fail outright with an unknown-flag error on first real
+ * `setup`. `two-way-resolved` mode has a *fixed*, non-configurable rule
+ * instead: **alpha always wins every conflict** (including deletions
+ * overwriting the other side's edits). There is no flag or config to
+ * reverse this — the only way to control which side wins is to control
+ * which endpoint you pass as `alpha`.
+ *
+ * Because of this, **every caller in this codebase must pass the side
+ * that should win conflicts as `alpha` and the other side as `beta`** —
+ * this is the opposite of what the parameter names might suggest if you
+ * think of "alpha" as "primary"/"the Mac". To implement this project's
+ * "remote wins" safety property (README's "Operational rules",
+ * launch.ts's `confirmNoConcurrentClaudeSession`), callers pass the
+ * *remote* path as `alpha` and the *Mac* path as `beta` — see setup.ts's
+ * `ensureClaudeHomeSync` and launch.ts's workspace session creation.
  */
 export async function createSession(opts: {
   name: string;
@@ -96,7 +91,6 @@ export async function createSession(opts: {
     opts.beta,
     `--name=${opts.name}`,
     '--sync-mode=two-way-resolved',
-    '--default-conflict-resolution=beta',
     ...opts.ignore.map((pattern) => `--ignore=${pattern}`),
   ];
   await runMutagen(args);
@@ -176,4 +170,23 @@ export async function getSessionStatusText(name: string): Promise<string> {
   }
   const { stdout } = await runMutagen(['sync', 'list', name, '--long']);
   return stdout;
+}
+
+/**
+ * Streams live-updating progress for one or more sessions via `mutagen
+ * sync monitor`, used by `claude-remote monitor`. Unlike every other
+ * function in this file, this doesn't use `runMutagen`/`execFileAsync` —
+ * `sync monitor` is a long-running, continuously-redrawing terminal
+ * command (like `top`), not a one-shot call whose output you capture and
+ * return. `stdio: 'inherit'` hands the real terminal to mutagen directly
+ * so its live redraw works, the same pattern launch.ts uses for handing
+ * off to ssh/tmux. Resolves when the user Ctrl+C's out of watching —
+ * that only stops the terminal view, not the background sync itself.
+ */
+export function monitorSessions(names: string[]): Promise<number> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('mutagen', ['sync', 'monitor', '--long', ...names], { stdio: 'inherit' });
+    child.on('error', reject);
+    child.on('close', (code) => resolvePromise(code ?? 1));
+  });
 }

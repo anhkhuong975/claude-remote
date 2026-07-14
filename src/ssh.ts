@@ -77,6 +77,27 @@ export async function checkConnectivity(remote: Config['remote']): Promise<void>
 }
 
 /**
+ * Prefixes a remote command with nvm's shell-sourcing preamble.
+ * Confirmed empirically against a real remote (2026-07-14): nvm's own
+ * installer only wires its PATH setup into ~/.bashrc, which a
+ * non-interactive SSH command (`ssh host "some command"`) never sources
+ * — without this prefix, `node`/`npm`/`claude` silently resolve to
+ * whatever (older, or nonexistent) version apt installed system-wide
+ * instead of failing loudly, which is a much worse failure mode than an
+ * explicit "not found". Every remote command that needs node/npm/claude
+ * must go through this, not just the nvm-install step itself — see
+ * setup.ts's `ensureNodeViaNvm` for why nvm is used instead of apt's own
+ * `nodejs` package in the first place.
+ *
+ * `[ -s "$NVM_DIR/nvm.sh" ] &&` guards against nvm not being installed
+ * yet, so a command wrapped in this before setup has run fails with a
+ * normal "command not found" instead of an unrelated sourcing error.
+ */
+export function withNvmInit(command: string): string {
+  return `export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; ${command}`;
+}
+
+/**
  * Minimal POSIX shell single-quoting for the command string handed to
  * tmux/ssh below. The remote side always runs bash/tmux — Windows
  * targets are WSL2, a real Linux userspace — so this deliberately never
@@ -122,7 +143,7 @@ export function buildInteractiveLaunchArgs(
     `export CLAUDE_CONFIG_DIR=${shellQuote(opts.claudeConfigDir)}`;
 
   const innerCommand = opts.autoStartClaude
-    ? `${exportsAndCd} && claude ${opts.claudeArgs.map(shellQuote).join(' ')}`
+    ? withNvmInit(`${exportsAndCd} && claude ${opts.claudeArgs.map(shellQuote).join(' ')}`)
     : `${exportsAndCd} && exec $SHELL`;
 
   const tmuxCommand = `tmux new-session -A -s ${shellQuote(opts.tmuxSessionName)} ${shellQuote(innerCommand)}`;

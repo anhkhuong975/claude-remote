@@ -73,10 +73,16 @@ export async function runLaunch(config: Config, opts: { skipConfirm: boolean }):
   // create the sync root itself on first sync, so this asymmetry likely
   // isn't a functional break — but it's unverified (no live Mutagen
   // available during implementation) and worth confirming on a real run.
+  //
+  // alpha/beta are the *remote* and *local* paths respectively, not the
+  // other way around — see createSession's docstring (sync.ts): Mutagen's
+  // `two-way-resolved` mode always makes alpha win conflicts, with no
+  // flag to reverse it, so "remote wins" (this project's documented
+  // safety property) requires the remote to be alpha.
   await ensureSession({
     name: sessionNameForWorkspace(workspaceLocal),
-    alpha: workspaceLocal,
-    beta: `${config.remote.user}@${config.remote.host}:${workspaceRemote}`,
+    alpha: `${config.remote.user}@${config.remote.host}:${workspaceRemote}`,
+    beta: workspaceLocal,
     ignore: config.sync.ignore,
   });
 

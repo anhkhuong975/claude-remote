@@ -5,11 +5,12 @@ import {
   DEFAULT_CONFIG_PATH,
   resolveWorkspaceLocal,
   resolveWorkspaceRemote,
+  type Config,
 } from './config.js';
 import { runSetup, CLAUDE_HOME_SESSION_NAME } from './setup.js';
 import { runLaunch, sessionNameForWorkspace } from './launch.js';
 import { checkConnectivity } from './ssh.js';
-import { getSessionStatusText } from './sync.js';
+import { getSessionStatusText, monitorSessions } from './sync.js';
 
 /**
  * Factored out from bin/claude-remote.ts so the CLI's wiring can be
@@ -18,6 +19,17 @@ import { getSessionStatusText } from './sync.js';
  * Constraints), but keeps the entrypoint file itself a one-liner that
  * only handles process-level concerns (argv, exit code).
  */
+/**
+ * Shared by `status` and `monitor` so both always watch the exact same
+ * two sessions (the persistent claude-home one plus whichever workspace
+ * session corresponds to the currently-active workspace) — a single
+ * source of truth instead of two copies that could drift apart.
+ */
+function activeSessionNames(config: Config): string[] {
+  const workspaceLocal = resolveWorkspaceLocal(config);
+  return [CLAUDE_HOME_SESSION_NAME, sessionNameForWorkspace(workspaceLocal)];
+}
+
 export function buildCli(): Command {
   const program = new Command();
   program
@@ -63,10 +75,7 @@ export function buildCli(): Command {
       // there may be other, older workspace sessions from previously
       // used projects that this deliberately doesn't enumerate (v1 has
       // no session-listing/cleanup command; see spec's YAGNI framing).
-      const workspaceLocal = resolveWorkspaceLocal(config);
-      const sessionNames = [CLAUDE_HOME_SESSION_NAME, sessionNameForWorkspace(workspaceLocal)];
-
-      for (const name of sessionNames) {
+      for (const name of activeSessionNames(config)) {
         console.log(`\n${name}:`);
         try {
           console.log(await getSessionStatusText(name));
@@ -74,6 +83,15 @@ export function buildCli(): Command {
           console.log(`  ${(err as Error).message}`);
         }
       }
+    });
+
+  program
+    .command('monitor')
+    .description('Live-stream sync progress for both sessions (Ctrl+C stops watching, not the sync itself)')
+    .action(async () => {
+      const config = loadConfig(program.opts().config);
+      const code = await monitorSessions(activeSessionNames(config));
+      process.exitCode = code;
     });
 
   program

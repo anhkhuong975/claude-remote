@@ -1,14 +1,17 @@
 # claude-remote
 
+[![npm version](https://img.shields.io/npm/v/claude-remote-sync.svg)](https://www.npmjs.com/package/claude-remote-sync)
+
 Run Claude Code (with `--dangerously-skip-permissions`) on a fully-trusted,
 physically separate machine instead of in a local Docker container. Keeps
 `~/.claude` and the active project workspace continuously synced to that
 machine via [Mutagen](https://mutagen.io), and drops you into a live Claude
 Code session there over SSH + tmux.
 
-Sibling tool to `claude-docker` — same author, same personal/local-only
-status (never pushed to a remote git host). Full design rationale:
-`docs/superpowers/specs/2026-07-13-claude-remote-design.md`.
+Sibling tool to `claude-docker` — same author. Published to npm as
+[`claude-remote-sync`](https://www.npmjs.com/package/claude-remote-sync)
+(the CLI command itself stays `claude-remote` — see "Setup" below). Full
+design rationale: `docs/superpowers/specs/2026-07-13-claude-remote-design.md`.
 
 ## Prerequisites
 
@@ -37,18 +40,36 @@ status (never pushed to a remote git host). Full design rationale:
 
 ## Setup
 
+Install from npm (recommended):
+
+```bash
+npm install -g claude-remote-sync   # puts `claude-remote` on PATH
+```
+
+Or, working from a clone of this repo:
+
 ```bash
 npm install
 npm run build
 npm link          # puts `claude-remote` on PATH
+```
 
+Either way, then create `~/.config/claude-remote/config.yaml` (fields:
+`remote.host`, `remote.user`, `remote.os` — `linux` or `windows-wsl2`,
+checked against `uname -a` during setup — `remote.sshKeyPath`,
+`remote.homeMirrorPath`, which should match `echo $HOME` on the Mac, e.g.
+`/Users/pak`, and `workspace.local`). If you're working from a clone of
+this repo, `config.example.yaml` has a filled-in template you can copy:
+
+```bash
 mkdir -p ~/.config/claude-remote
 cp config.example.yaml ~/.config/claude-remote/config.yaml
-# edit ~/.config/claude-remote/config.yaml: remote.host, remote.user,
-# remote.os (linux or windows-wsl2 — checked against `uname -a` during
-# setup), remote.sshKeyPath, remote.homeMirrorPath (should match
-# `echo $HOME` on the Mac, e.g. /Users/pak), workspace.local
+# then edit it — see the field list above
+```
 
+Then:
+
+```bash
 claude-remote setup
 ```
 

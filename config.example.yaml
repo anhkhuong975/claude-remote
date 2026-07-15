@@ -9,7 +9,19 @@ workspace:
   local: /Users/pak/Projects/Deepsel/DeepselSystems/alcoris-site
 
 sync:
-  ignore: [node_modules, .venv, dist, build, __pycache__]
+  ignore:
+    [
+      node_modules,
+      .venv,
+      dist,
+      build,
+      __pycache__,
+      package-lock.json,
+      .astro,
+      .pytest_cache,
+      .mypy_cache,
+      .ruff_cache,
+    ]
 
 tmux:
   sessionName: claude-remote

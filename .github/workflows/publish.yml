@@ -1,0 +1,47 @@
+name: Publish to npm
+
+# Fires on any tag matching vX.Y.Z (e.g. v0.2.0), pushed after bumping
+# package.json's version with `npm version patch|minor|major` and
+# `git push --follow-tags`. See README's "Publishing" section.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for npm's OIDC-based Trusted Publishing — no NPM_TOKEN
+      # secret needed. See README's "Publishing" section for the one-time
+      # setup this depends on.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted Publishing requires npm CLI >= 11.5; the npm bundled with
+      # setup-node's Node version can lag behind that.
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+
+      # Fails fast if someone pushes a tag without bumping package.json,
+      # instead of letting npm publish silently fail on a duplicate version.
+      - name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - run: npm run build
+
+      - run: npm publish --provenance --access public

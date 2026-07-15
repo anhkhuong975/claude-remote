@@ -110,6 +110,36 @@ Check sync/connectivity state without launching: `claude-remote status`.
 - Conflicts, if they happen, default to "remote wins". Check
   `claude-remote status` if something looks like it reverted unexpectedly.
 
+## Publishing
+
+Published to npm as `claude-remote-sync` (the `claude-remote` name was
+already taken by an unrelated package; the installed CLI command itself is
+still `claude-remote` — see `bin` in `package.json`). Releases are built and
+published by `.github/workflows/publish.yml`, triggered by pushing a
+`vX.Y.Z` tag — nothing is ever published from a local machine.
+
+**One-time setup (do this once, before the first release):**
+
+1. `npm login` locally and run `npm publish --access public` once by hand.
+   npm's Trusted Publisher setting (used for every release after this) lives
+   on a package's settings page, which only exists once the package has been
+   published at least once.
+2. On npmjs.com: package page → *Settings* → *Publishing access* → add a
+   Trusted Publisher — GitHub Actions, repo `anhkhuong975/claude-remote`,
+   workflow file `publish.yml`, no environment.
+3. From then on, CI publishes via OIDC (no `NPM_TOKEN` secret needed, per
+   the `id-token: write` permission in the workflow).
+
+**Every release after that:**
+
+```bash
+npm version patch   # or minor / major — bumps package.json + creates a git tag
+git push --follow-tags
+```
+
+The workflow verifies the pushed tag matches `package.json`'s version,
+builds, and publishes with provenance.
+
 ## Manual end-to-end verification checklist
 
 This project has no automated tests (see the design spec's "Testing"

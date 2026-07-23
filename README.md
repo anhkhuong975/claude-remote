@@ -2,72 +2,152 @@
 
 [![npm version](https://img.shields.io/npm/v/claude-remote-sync.svg)](https://www.npmjs.com/package/claude-remote-sync)
 
-Run Claude Code (with `--dangerously-skip-permissions`) on a fully-trusted,
-physically separate machine instead of in a local Docker container. Keeps
-`~/.claude` and the active project workspace continuously synced to that
-machine via [Mutagen](https://mutagen.io), and drops you into a live Claude
-Code session there over SSH + tmux.
+## What this is
 
-Sibling tool to `claude-docker` — same author. Published to npm as
-[`claude-remote-sync`](https://www.npmjs.com/package/claude-remote-sync)
-(the CLI command itself stays `claude-remote` — see "Setup" below). Full
-design rationale: `docs/superpowers/specs/2026-07-13-claude-remote-design.md`.
+`claude-remote` runs Claude Code (with `--dangerously-skip-permissions`) on a
+separate, fully-trusted machine — instead of on your own Mac — while making
+that remote session feel local. It keeps two things continuously synced
+between your Mac and the remote machine via [Mutagen](https://mutagen.io):
+
+- Claude Code's own config and session history (`~/.claude`)
+- Your active project's files
+
+Then it drops you into a live Claude Code session on the remote over SSH +
+tmux, working on the synced copy of your project.
+
+**Why:** `--dangerously-skip-permissions` gives Claude Code unrestricted
+filesystem/shell access with no confirmation prompts — safer to run against a
+separate machine's filesystem than your own. Continuous two-way sync is what
+makes that separate machine still feel like your own dev environment: same
+project files, same Claude session history, resumable from either side.
+
+The remote machine doesn't need to be on the same local network as your Mac —
+any host you can SSH into works (LAN, a machine reachable over the internet,
+or one behind a VPN/Tailscale). See "How it works" below for what's actually
+required.
+
+## How it works
+
+```
+  Mac (control)                                    Remote (Linux / WSL2)
+  ------------------------                         ------------------------
+
+  ~/.claude               --- Mutagen sync --->     <homeMirrorPath>/.claude
+  (config + history)          "claude-home"
+                               (started once by
+                                `claude-remote setup`,
+                                runs permanently)
+
+  <active project>        --- Mutagen sync --->     <same absolute path>
+                               "workspace"
+                               (retargeted on every
+                                `claude-remote launch`)
+
+  `claude-remote launch`  --- SSH + tmux ----->      Claude Code running
+  attaches here                                      inside the workspace
+```
+
+Two Mutagen sync sessions run independently of each other:
+
+1. **`claude-home`** — mirrors `~/.claude` (Claude Code's config and session
+   history) between the Mac and `<homeMirrorPath>/.claude` on the remote.
+   Created once by `claude-remote setup` and left running in the background
+   from then on — it isn't tied to any particular project.
+2. **`workspace`** — mirrors your active project directory. Retargeted every
+   time you run `claude-remote launch`, either against the project set in
+   `config.yaml` or a different one passed via `CLAUDE_REMOTE_WORKSPACE`.
+
+Both sessions sync two-way. If the same file changes on both sides before a
+sync catches up, **the remote's copy always wins** — see "Operational rules"
+below for what that means in practice.
+
+On top of sync, `claude-remote launch` opens an SSH connection to the remote
+and attaches to a tmux session there, running Claude Code inside the synced
+workspace. Detaching (`Ctrl-b d`) leaves that tmux session — and Claude Code —
+running on the remote; running `claude-remote launch` again reattaches to it
+instead of starting a new one.
+
+**Why paths have to line up:** `homeMirrorPath` in `config.yaml` is set to
+mirror the Mac's own home directory path (e.g. `/Users/pak`), and your project
+lives at the same absolute path on both sides. This is what lets Claude Code
+resume a session that has history from the other machine — its own
+path-derived session keys only match up because the paths are identical, not
+just similarly structured.
+
+## Components
+
+| Component | Runs on | Responsibility |
+|---|---|---|
+| `claude-remote` CLI | Mac | Everything you run — `setup`, `launch`, `status`, `monitor`, `config`. |
+| `config.yaml` | Mac | Single source of truth: remote host/user/OS, path layout, sync ignore list, tmux session name, launch behavior. |
+| Mutagen | Mac (daemon) + Remote (agent, auto-installed by Mutagen itself) | Owns both sync sessions described above. |
+| `tmux`, Node.js (via `nvm`), Claude Code CLI | Remote | Installed automatically by `claude-remote setup` — nothing to install by hand beyond SSH access. |
 
 ## Prerequisites
 
-**On the Mac (control machine):**
+**On the Mac:**
+- Node.js >= 18 (to install/run the `claude-remote` CLI itself)
 - `brew install mutagen-io/mutagen/mutagen`
-- SSH key access to the remote already working (`ssh <user>@<host>` should
-  need no password or prompt) — this tool never generates or copies keys
-  for you.
+- SSH key access to the remote already working — `ssh <user>@<host>` should
+  need no password or prompt. This tool never generates or copies keys for
+  you.
 
 **On the remote machine:**
 - Linux (any apt-based distro) or Windows with WSL2 already installed
-  (native Windows without WSL2 is not supported — see the design spec).
-  On Windows, this also requires the machine's own SSH server to be
-  configured so an *incoming* SSH connection lands inside WSL2, not
-  native PowerShell/cmd.exe — the default OpenSSH Server on Windows
-  drops you into PowerShell unless it's been specifically set up (or is
-  itself running inside WSL2) to hand sessions to the Linux userspace.
-  `claude-remote setup` assumes this is already true; it does not check
-  or configure it for you, and every remote command it runs (`uname -a`,
-  `apt-get`, `mkdir -p`, `command -v ...`) expects a bash/Linux shell.
-  Step-by-step SSH server setup: `docs/remote-setup/windows-wsl2.md`
-  (Windows) or `docs/remote-setup/linux.md` (Linux).
+  (native Windows without WSL2 is not supported).
 - Reachable over SSH from the Mac.
-- Everything else (`tmux`, Node.js, the Claude Code CLI) is installed
-  automatically by `claude-remote setup`.
+- On Windows specifically: the machine's SSH server must be configured so an
+  *incoming* SSH connection lands inside WSL2, not native PowerShell/cmd.exe
+  — the default OpenSSH Server on Windows drops you into PowerShell unless
+  it's been set up to hand sessions to the Linux userspace. `claude-remote
+  setup` assumes this is already true; it does not check or configure it,
+  and every remote command it runs expects a bash/Linux shell. Step-by-step:
+  `docs/remote-setup/windows-wsl2.md` (Windows) or `docs/remote-setup/linux.md`
+  (Linux).
+- `tmux`, Node.js, and the Claude Code CLI are **not** manual prerequisites —
+  `claude-remote setup` installs all three.
 
 ## Setup
 
-Install from npm (recommended):
+Install:
 
 ```bash
-npm install -g claude-remote-sync   # puts `claude-remote` on PATH
+npm install -g claude-remote-sync
 ```
 
-Or, working from a clone of this repo:
-
-```bash
-npm install
-npm run build
-npm link          # puts `claude-remote` on PATH
-```
-
-Either way, then create `~/.config/claude-remote/config.yaml` (fields:
-`remote.host`, `remote.user`, `remote.os` — `linux` or `windows-wsl2`,
-checked against `uname -a` during setup — `remote.sshKeyPath`,
-`remote.homeMirrorPath`, which should match `echo $HOME` on the Mac, e.g.
-`/Users/pak`, and `workspace.local`). If you're working from a clone of
-this repo, `config.example.yaml` has a filled-in template you can copy:
+Create `~/.config/claude-remote/config.yaml`:
 
 ```bash
 mkdir -p ~/.config/claude-remote
-cp config.example.yaml ~/.config/claude-remote/config.yaml
-# then edit it — see the field list above
 ```
 
-Then:
+with these fields:
+
+```yaml
+remote:
+  host: 192.168.1.50          # or a public hostname/IP — LAN is not required
+  user: pak
+  sshKeyPath: ~/.ssh/id_ed25519   # optional — falls back to ssh-agent/~/.ssh/config
+  os: linux                   # or windows-wsl2 — checked against `uname -a` during setup
+  homeMirrorPath: /Users/pak  # must match `echo $HOME` on THIS Mac
+
+workspace:
+  local: /path/to/your/project
+
+sync:
+  ignore: [node_modules, .venv, dist, build, __pycache__]
+
+tmux:
+  sessionName: claude-remote
+
+launch:
+  autoStartClaude: true
+  claudeArgs: ["--dangerously-skip-permissions"]
+```
+
+Then run the one-time setup, which verifies SSH access and installs
+everything needed on the remote (`tmux`, Node.js, the Claude Code CLI), and
+starts the `claude-home` sync session:
 
 ```bash
 claude-remote setup
@@ -81,10 +161,10 @@ claude-remote launch
 CLAUDE_REMOTE_WORKSPACE=/path/to/other/repo claude-remote launch
 ```
 
-`launch` drops you into a tmux session on the remote, running Claude Code
-in the synced workspace. Detach with `Ctrl-b d` any time; running
-`claude-remote launch` again reattaches to the same session instead of
-starting a new one.
+`launch` syncs the active workspace and drops you into a live Claude Code
+session on the remote, inside a tmux session. Detach with `Ctrl-b d` any
+time; running `claude-remote launch` again reattaches to that same session
+instead of starting a new one.
 
 Check sync/connectivity state without launching: `claude-remote status`.
 
@@ -105,14 +185,7 @@ Check sync/connectivity state without launching: `claude-remote status`.
   dashboard: both sessions' Mutagen sync status plus CPU/RAM/disk
   performance for the Mac and the remote, refreshed every `--interval`
   seconds (default `3`). `Ctrl+C` stops watching, not the sync itself — it
-  keeps running in Mutagen's background daemon either way. Performance
-  numbers come from a handful of cheap one-shot reads
-  (`/proc/loadavg`/`free`/`df` on the remote, `uptime`/`vm_stat`/`df` on
-  the Mac) bundled into a single SSH call per cycle over a reused
-  multiplexed connection — not a continuous sampler — so watching the
-  dashboard doesn't itself become a meaningful load on either machine. See
-  `docs/superpowers/specs/2026-07-14-monitor-performance-dashboard-design.md`
-  for the full design.
+  keeps running in Mutagen's background daemon either way.
 - `claude-remote config` — print the fully resolved config (after any
   `CLAUDE_REMOTE_WORKSPACE` override) as JSON; useful for confirming
   which workspace/paths a command would actually use before running it.
@@ -133,11 +206,9 @@ Check sync/connectivity state without launching: `claude-remote status`.
 
 ## Publishing
 
-Published to npm as `claude-remote-sync` (the `claude-remote` name was
-already taken by an unrelated package; the installed CLI command itself is
-still `claude-remote` — see `bin` in `package.json`). Releases are built and
-published by `.github/workflows/publish.yml`, triggered by pushing a
-`vX.Y.Z` tag — nothing is ever published from a local machine.
+Published to npm as `claude-remote-sync`. Releases are built and published
+by `.github/workflows/publish.yml`, triggered by pushing a `vX.Y.Z` tag —
+nothing is ever published from a local machine.
 
 **One-time setup (do this once, before the first release):**
 
@@ -163,13 +234,9 @@ builds, and publishes with provenance.
 
 ## Manual end-to-end verification checklist
 
-This project has no automated tests (see the design spec's "Testing"
-section) and was implemented without a reachable SSH target available
-(macOS Remote Login was left off during implementation — see the plan's
-"Global Constraints"). Everything up through real command construction
-and local error-handling paths was verified during implementation; the
-following still needs a real run against an actual remote machine before
-trusting this day-to-day:
+This project has no automated tests and was implemented without a reachable
+SSH target available during initial development. The following still needs
+a real run against an actual remote machine before trusting this day-to-day:
 
 - [ ] `claude-remote setup` against a real, freshly-provisioned Linux or
       WSL2 machine: completes without error, leaves `tmux`, `node`, and
